@@ -241,13 +241,16 @@ where
     /// Overide an opcode with a custom handler. Returns the previous
     /// instruction handler for the opcode.
     pub fn override_opcode(&mut self, opcode: u8, handler: Instruction<Db>) -> Instruction<Db> {
-        std::mem::replace(&mut self.inner.instruction.instruction_table[opcode as usize], handler)
+        std::mem::replace(
+            &mut self.inner.instruction.instruction_table_mut()[opcode as usize],
+            handler,
+        )
     }
 
     /// Disable an opcode by replacing it with unknown opcode behavior. This is
     /// a shortcut for [`Self::override_opcode`] with [`crate::helpers::forbidden`].
     pub fn disable_opcode(&mut self, opcode: u8) -> Instruction<Db> {
-        self.override_opcode(opcode, Instruction::new(crate::helpers::forbidden, 0))
+        self.override_opcode(opcode, Instruction::new(crate::helpers::forbidden))
     }
 
     /// Run some closure with an opcode override, then restore the previous
@@ -261,8 +264,9 @@ where
     where
         F: FnOnce(Self) -> Trevm<Db, Insp, NewState>,
     {
+        let gas = self.inner.instruction.gas_table()[opcode as usize];
         let old = self.override_opcode(opcode, handler);
-        self.inner.instruction.insert_instruction(opcode, handler);
+        self.inner.instruction.insert_instruction(opcode, handler, gas);
         let mut this = f(self);
         this.override_opcode(opcode, old);
         this
@@ -278,7 +282,7 @@ where
     /// Enable the prevrandao opcode. If the prevrandao opcode was not
     /// previously disabled or replaced, this will have no effect on behavior.
     pub fn enable_prevrandao(&mut self) -> Instruction<Db> {
-        self.override_opcode(DIFFICULTY, Instruction::new(block_info::difficulty, 2))
+        self.override_opcode(DIFFICULTY, Instruction::new(block_info::difficulty))
     }
 
     /// Run some code with the prevrandao opcode disabled, then restore the
@@ -288,7 +292,7 @@ where
     where
         F: FnOnce(Self) -> Trevm<Db, Insp, NewState>,
     {
-        self.with_opcode_override(DIFFICULTY, Instruction::new(crate::helpers::forbidden, 0), f)
+        self.with_opcode_override(DIFFICULTY, Instruction::new(crate::helpers::forbidden), f)
     }
 
     /// Set the precompiles for the EVM. This will replace the current

@@ -6,8 +6,7 @@ use alloy::{
 use revm::{
     bytecode::Bytecode,
     database::{in_memory_db::Cache, AccountState, DbAccount},
-    primitives::HashMap,
-    state::{Account, AccountInfo},
+    state::{AccountInfo, EvmState},
     Database, DatabaseCommit, DatabaseRef,
 };
 
@@ -216,7 +215,7 @@ impl<Db: DatabaseRef> DatabaseRef for CacheOnWrite<Db> {
 }
 
 impl<Db> DatabaseCommit for CacheOnWrite<Db> {
-    fn commit(&mut self, changes: HashMap<Address, Account>) {
+    fn commit(&mut self, changes: EvmState) {
         // Reproduced from
         // revm/crates/database/src/in_memory_db.rs
         for (address, mut account) in changes {
@@ -262,8 +261,21 @@ mod tests {
     use revm::{
         bytecode::Bytecode,
         database::InMemoryDB,
-        state::{AccountStatus, EvmStorageSlot},
+        state::{Account, AccountStatus, EvmState, EvmStorageSlot, TransactionId},
     };
+
+    fn transaction_id() -> TransactionId {
+        TransactionId::new(0).expect("0 is a valid revm transaction id")
+    }
+
+    fn touched_account(info: AccountInfo, storage: revm::state::EvmStorage) -> Account {
+        let mut account = Account::default().with_info(info);
+        account.set_current_info_as_original();
+        account.storage = storage;
+        account.transaction_id = transaction_id();
+        account.status = AccountStatus::Touched;
+        account
+    }
 
     #[test]
     fn state_isolation_regression() {
@@ -273,21 +285,17 @@ mod tests {
 
         // Write an account with storage at index 0 to the underlying DB
         let original_info = AccountInfo { balance: U256::from(5000), ..Default::default() };
-        let account = Account {
-            original_info: Box::new(original_info.clone()),
-            info: original_info,
-            storage: [(U256::from(0), EvmStorageSlot::new_changed(U256::ZERO, U256::from(42), 0))]
-                .into_iter()
-                .collect(),
-            transaction_id: 0,
-            status: AccountStatus::Touched,
-        };
+        let account = touched_account(
+            original_info,
+            [(
+                U256::from(0),
+                EvmStorageSlot::new_changed(U256::ZERO, U256::from(42), transaction_id()),
+            )]
+            .into_iter()
+            .collect(),
+        );
 
-        let mut changes: std::collections::HashMap<
-            Address,
-            Account,
-            revm::primitives::map::DefaultHashBuilder,
-        > = Default::default();
+        let mut changes = EvmState::default();
         changes.insert(address, account);
         mem_db.commit(changes);
 
@@ -304,21 +312,17 @@ mod tests {
 
         // Write a storage item at index 1 to the COW DB
         let original_info = AccountInfo { balance: U256::from(5000), ..Default::default() };
-        let account = Account {
-            original_info: Box::new(original_info.clone()),
-            info: original_info,
-            storage: [(U256::from(1), EvmStorageSlot::new_changed(U256::ZERO, U256::from(42), 0))]
-                .into_iter()
-                .collect(),
-            transaction_id: 0,
-            status: AccountStatus::Touched,
-        };
+        let account = touched_account(
+            original_info,
+            [(
+                U256::from(1),
+                EvmStorageSlot::new_changed(U256::ZERO, U256::from(42), transaction_id()),
+            )]
+            .into_iter()
+            .collect(),
+        );
 
-        let mut changes: std::collections::HashMap<
-            Address,
-            Account,
-            revm::primitives::map::DefaultHashBuilder,
-        > = Default::default();
+        let mut changes = EvmState::default();
         changes.insert(address, account);
         cow_db.commit(changes);
 

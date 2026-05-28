@@ -2,9 +2,26 @@ use alloy::primitives::{Address, U256};
 use revm::{
     bytecode::Bytecode,
     database::{Database, DatabaseCommit, TryDatabaseCommit},
-    primitives::HashMap,
-    state::{Account, AccountInfo, AccountStatus, EvmStorageSlot},
+    state::{Account, AccountInfo, AccountStatus, EvmState, EvmStorageSlot, TransactionId},
 };
+
+fn transaction_id() -> TransactionId {
+    TransactionId::new(0).expect("0 is a valid revm transaction id")
+}
+
+fn modified_account(
+    original_info: AccountInfo,
+    info: AccountInfo,
+    storage: revm::state::EvmStorage,
+) -> Account {
+    let mut account = Account::default().with_info(original_info);
+    account.set_current_info_as_original();
+    account.info = info;
+    account.storage = storage;
+    account.status = AccountStatus::Touched;
+    account.transaction_id = transaction_id();
+    account
+}
 
 /// Test utilities for databases.
 #[doc(hidden)]
@@ -17,14 +34,8 @@ pub trait DbTestExt: Database + DatabaseCommit {
         let original_info = self.basic(address).ok().flatten().unwrap_or_default();
         let mut info = original_info.clone();
         f(&mut info);
-        let account = Account {
-            info,
-            original_info: Box::new(original_info),
-            storage: Default::default(),
-            status: AccountStatus::Touched,
-            transaction_id: 0,
-        };
-        self.commit(HashMap::from_iter([(address, account)]));
+        let account = modified_account(original_info, info, Default::default());
+        self.commit(EvmState::from_iter([(address, account)]));
     }
 
     /// Set account balance.
@@ -54,16 +65,11 @@ pub trait DbTestExt: Database + DatabaseCommit {
     /// Set a storage slot.
     fn test_set_storage(&mut self, address: Address, slot: U256, value: U256) {
         let info = self.basic(address).ok().flatten().unwrap_or_default();
-        let storage =
-            HashMap::from_iter([(slot, EvmStorageSlot::new_changed(U256::ZERO, value, 0))]);
-        let account = Account {
-            info: info.clone(),
-            original_info: Box::new(info),
-            storage,
-            status: AccountStatus::Touched,
-            transaction_id: 0,
-        };
-        self.commit(HashMap::from_iter([(address, account)]));
+        let storage = [(slot, EvmStorageSlot::new_changed(U256::ZERO, value, transaction_id()))]
+            .into_iter()
+            .collect();
+        let account = modified_account(info.clone(), info, storage);
+        self.commit(EvmState::from_iter([(address, account)]));
     }
 
     /// Set account bytecode.
@@ -92,14 +98,8 @@ pub trait TryDbTestExt: Database + TryDatabaseCommit {
         let original_info = self.basic(address).ok().flatten().unwrap_or_default();
         let mut info = original_info.clone();
         f(&mut info);
-        let account = Account {
-            info,
-            original_info: Box::new(original_info),
-            storage: Default::default(),
-            status: AccountStatus::Touched,
-            transaction_id: 0,
-        };
-        self.try_commit(HashMap::from_iter([(address, account)]))
+        let account = modified_account(original_info, info, Default::default());
+        self.try_commit(EvmState::from_iter([(address, account)]))
     }
 
     /// Set account balance.
@@ -150,16 +150,11 @@ pub trait TryDbTestExt: Database + TryDatabaseCommit {
         value: U256,
     ) -> Result<(), <Self as TryDatabaseCommit>::Error> {
         let info = self.basic(address).ok().flatten().unwrap_or_default();
-        let storage =
-            HashMap::from_iter([(slot, EvmStorageSlot::new_changed(U256::ZERO, value, 0))]);
-        let account = Account {
-            info: info.clone(),
-            original_info: Box::new(info),
-            storage,
-            status: AccountStatus::Touched,
-            transaction_id: 0,
-        };
-        self.try_commit(HashMap::from_iter([(address, account)]))
+        let storage = [(slot, EvmStorageSlot::new_changed(U256::ZERO, value, transaction_id()))]
+            .into_iter()
+            .collect();
+        let account = modified_account(info.clone(), info, storage);
+        self.try_commit(EvmState::from_iter([(address, account)]))
     }
 
     /// Set account bytecode.

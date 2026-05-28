@@ -62,9 +62,7 @@ pub trait StateAcc {
 }
 
 impl<Db: Database> StateAcc for State<Db> {
-    fn set_state_clear_flag(&mut self, flag: bool) {
-        Self::set_state_clear_flag(self, flag)
-    }
+    fn set_state_clear_flag(&mut self, _flag: bool) {}
 
     fn merge_transitions(&mut self, retention: BundleRetention) {
         Self::merge_transitions(self, retention)
@@ -75,7 +73,7 @@ impl<Db: Database> StateAcc for State<Db> {
     }
 
     fn set_block_hashes(&mut self, block_hashes: &BTreeMap<u64, B256>) {
-        self.block_hashes.extend(block_hashes)
+        self.block_hashes.extend(block_hashes.iter().map(|(&number, &hash)| (number, hash)))
     }
 }
 

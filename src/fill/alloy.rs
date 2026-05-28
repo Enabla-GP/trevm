@@ -383,6 +383,7 @@ impl Block for alloy::consensus::Header {
             difficulty,
             prevrandao,
             blob_excess_gas_and_price: _,
+            slot_num: _,
         } = block_env;
         *number = U256::from(self.number);
         *beneficiary = self.beneficiary;
@@ -482,6 +483,7 @@ impl Block for alloy::rpc::types::BlockOverrides {
             difficulty,
             prevrandao,
             blob_excess_gas_and_price: _,
+            slot_num: _,
         } = block_env;
         if let Some(n) = &self.number {
             *number = n.saturating_to();

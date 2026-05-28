@@ -6,7 +6,7 @@ use revm::{
         states::{bundle_state::BundleRetention, plain_account::PlainStorage, CacheAccount},
         BundleState, State, TransitionAccount, TransitionState,
     },
-    state::{Account, AccountInfo, Bytecode},
+    state::{AccountInfo, Bytecode, EvmState},
     Database, DatabaseCommit, DatabaseRef,
 };
 use std::{
@@ -41,7 +41,7 @@ where
                 transition_state: value.transition_state,
                 bundle_state: value.bundle_state,
                 use_preloaded_bundle: value.use_preloaded_bundle,
-                block_hashes: value.block_hashes.into(),
+                block_hashes: RwLock::new(value.block_hashes.iter().collect()),
             },
         }
     }
@@ -366,7 +366,7 @@ impl<Db: DatabaseRef + Sync> DatabaseRef for ConcurrentState<Db> {
 }
 
 impl<Db: DatabaseRef + Sync> DatabaseCommit for ConcurrentState<Db> {
-    fn commit(&mut self, evm_state: revm::primitives::HashMap<Address, Account>) {
+    fn commit(&mut self, evm_state: EvmState) {
         let transitions = self.info.cache.apply_evm_state(evm_state);
         self.apply_transition(transitions);
     }

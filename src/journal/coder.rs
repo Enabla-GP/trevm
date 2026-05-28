@@ -5,7 +5,7 @@ use alloy::{
     rlp::{Buf, BufMut, BytesMut},
 };
 use revm::{
-    bytecode::eip7702::{Eip7702Bytecode, Eip7702DecodeError},
+    bytecode::{bytecode::BytecodeKind, eip7702::Eip7702DecodeError},
     database::{states::StorageSlot, BundleState},
     state::{AccountInfo, Bytecode},
 };
@@ -357,9 +357,9 @@ impl JournalEncode for Bytecode {
     }
 
     fn encode(&self, buf: &mut dyn BufMut) {
-        match self {
-            Self::LegacyAnalyzed(_) => buf.put_u8(TAG_BYTECODE_RAW),
-            Self::Eip7702(_) => buf.put_u8(TAG_BYTECODE_7702),
+        match self.kind() {
+            BytecodeKind::LegacyAnalyzed => buf.put_u8(TAG_BYTECODE_RAW),
+            BytecodeKind::Eip7702 => buf.put_u8(TAG_BYTECODE_7702),
         }
 
         let raw = self.original_bytes();
@@ -579,7 +579,7 @@ impl JournalDecode for Bytecode {
 
         match tag {
             TAG_BYTECODE_RAW => Ok(Self::new_raw(raw)),
-            TAG_BYTECODE_7702 => Ok(Self::Eip7702(Eip7702Bytecode::new_raw(raw)?.into())),
+            TAG_BYTECODE_7702 => Ok(Self::new_eip7702_raw(raw)?),
             _ => Err(JournalDecodeError::InvalidTag { ty_name: "Bytecode", tag, max_expected: 2 }),
         }
     }

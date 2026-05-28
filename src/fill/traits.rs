@@ -223,6 +223,7 @@ mod test {
                 difficulty,
                 prevrandao,
                 blob_excess_gas_and_price,
+                slot_num,
             } = block_env;
             *number = U256::ONE;
             *beneficiary = Default::default();
@@ -238,6 +239,7 @@ mod test {
                 1_000_000,
                 revm::primitives::eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
             ));
+            *slot_num = 0;
         }
 
         fn tx_count_hint(&self) -> Option<usize> {
@@ -268,6 +270,7 @@ mod test {
             difficulty,
             prevrandao,
             blob_excess_gas_and_price,
+            slot_num,
         } = block;
 
         let TxEnv {

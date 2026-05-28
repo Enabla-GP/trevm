@@ -2,7 +2,7 @@ use alloy::primitives::{Address, B256, U256};
 use revm::{
     context::{ContextTr, Evm},
     primitives::HashMap,
-    state::{Account, AccountInfo, Bytecode, EvmState, EvmStorageSlot},
+    state::{Account, AccountInfo, Bytecode, EvmState, EvmStorageSlot, TransactionId},
     Database, DatabaseCommit,
 };
 
@@ -16,8 +16,8 @@ pub trait EvmExtUnchecked<Db: Database> {
     fn account(&mut self, address: Address) -> Result<Account, Db::Error> {
         let info = self.db_mut_ext().basic(address)?.unwrap_or_default();
         let created = info.is_empty();
-        let mut acct =
-            Account { original_info: Box::new(info.clone()), info, ..Default::default() };
+        let mut acct = Account::default().with_info(info);
+        acct.set_current_info_as_original();
         if created {
             acct.mark_created();
         }
@@ -47,7 +47,7 @@ pub trait EvmExtUnchecked<Db: Database> {
         F: Fn(&mut AccountInfo),
         Db: DatabaseCommit,
     {
-        let mut state = HashMap::default();
+        let mut state = EvmState::default();
         let mut old = HashMap::default();
         for addr in changes.into_iter() {
             let mut acct = self.account(addr)?;
@@ -84,7 +84,8 @@ pub trait EvmExtUnchecked<Db: Database> {
         let mut acct = self.account(address)?;
         let old = self.storage(address, index)?;
 
-        let change = EvmStorageSlot::new_changed(old, value, 0);
+        let transaction_id = TransactionId::new(0).expect("0 is a valid revm transaction id");
+        let change = EvmStorageSlot::new_changed(old, value, transaction_id);
         acct.storage.insert(index, change);
         acct.mark_touch();
 

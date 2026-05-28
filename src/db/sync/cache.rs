@@ -20,8 +20,6 @@ pub struct ConcurrentCacheState {
     /// Created contracts.
     // TODO add bytecode counter for number of bytecodes added/removed.
     pub contracts: DashMap<B256, Bytecode>,
-    /// Has EIP-161 state clear enabled (Spurious Dragon hardfork).
-    pub has_state_clear: bool,
 }
 
 impl From<CacheState> for ConcurrentCacheState {
@@ -29,7 +27,6 @@ impl From<CacheState> for ConcurrentCacheState {
         Self {
             accounts: other.accounts.into_iter().collect(),
             contracts: other.contracts.into_iter().collect(),
-            has_state_clear: other.has_state_clear,
         }
     }
 }
@@ -42,8 +39,8 @@ impl Default for ConcurrentCacheState {
 
 impl ConcurrentCacheState {
     /// New default state.
-    pub fn new(has_state_clear: bool) -> Self {
-        Self { accounts: DashMap::default(), contracts: DashMap::default(), has_state_clear }
+    pub fn new(_has_state_clear: bool) -> Self {
+        Self { accounts: DashMap::default(), contracts: DashMap::default() }
     }
 
     /// Absorb other into self, overwriting any existing values.
@@ -59,9 +56,7 @@ impl ConcurrentCacheState {
     }
 
     /// Set state clear flag. EIP-161.
-    pub const fn set_state_clear_flag(&mut self, has_state_clear: bool) {
-        self.has_state_clear = has_state_clear;
-    }
+    pub const fn set_state_clear_flag(&mut self, _has_state_clear: bool) {}
 
     /// Insert not existing account.
     pub fn insert_not_existing(&self, address: Address) {
@@ -149,14 +144,7 @@ impl ConcurrentCacheState {
         // And when empty account is touched it needs to be removed from database.
         // EIP-161 state clear
         if is_empty {
-            if self.has_state_clear {
-                // touch empty account.
-                this_account.touch_empty_eip161()
-            } else {
-                // if account is empty and state clear is not enabled we should save
-                // empty account.
-                this_account.touch_create_pre_eip161(changed_storage)
-            }
+            this_account.touch_empty_eip161()
         } else {
             Some(this_account.change(account.info, changed_storage))
         }

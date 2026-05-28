@@ -148,17 +148,17 @@ impl EstimationResult {
     /// limit of the transaction that produced the estimation.
     pub fn from_limit_and_execution_result(limit: u64, value: &ExecutionResult) -> Self {
         match value {
-            ExecutionResult::Success { gas_used, output, gas_refunded, .. } => Self::Success {
+            ExecutionResult::Success { gas, output, .. } => Self::Success {
                 limit,
-                refund: *gas_refunded,
-                gas_used: *gas_used,
+                refund: gas.final_refunded(),
+                gas_used: gas.tx_gas_used(),
                 output: output.clone(),
             },
-            ExecutionResult::Revert { output, gas_used } => {
-                Self::Revert { limit, reason: output.clone(), gas_used: *gas_used }
+            ExecutionResult::Revert { output, gas, .. } => {
+                Self::Revert { limit, reason: output.clone(), gas_used: gas.tx_gas_used() }
             }
-            ExecutionResult::Halt { reason, gas_used } => {
-                Self::Halt { limit, reason: reason.clone(), gas_used: *gas_used }
+            ExecutionResult::Halt { reason, gas, .. } => {
+                Self::Halt { limit, reason: reason.clone(), gas_used: gas.tx_gas_used() }
             }
         }
     }

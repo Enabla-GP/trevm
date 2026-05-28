@@ -198,7 +198,7 @@ impl BundleProcessor<EthCallBundle, EthCallBundleResponse> {
         basefee: u64,
         execution_result: ExecutionResult,
     ) -> Result<(EthCallBundleTransactionResult, U256), BundleError<Db>> {
-        let gas_used = execution_result.gas_used();
+        let gas_used = execution_result.tx_gas_used();
 
         // Calculate the gas price
         let gas_price = match tx {

@@ -76,7 +76,8 @@ where
     /// [EIP-2930]: https://eips.ethereum.org/EIPS/eip-2930
     /// [EIP-7702]: https://eips.ethereum.org/EIPS/eip-7702
     pub fn calculate_initial_gas(&self) -> u64 {
-        calculate_initial_tx_gas_for_tx(self.tx(), self.spec_id()).initial_gas
+        let gas = calculate_initial_tx_gas_for_tx(self.tx(), self.spec_id());
+        gas.initial_regular_gas.saturating_add(gas.initial_state_gas)
     }
 
     /// Estimate gas for a simple transfer. This will
