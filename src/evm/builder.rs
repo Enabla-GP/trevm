@@ -40,7 +40,7 @@ impl TrevmBuilder<NoOpInspector> {
     pub const fn new() -> Self {
         Self {
             insp: NoOpInspector,
-            spec: SpecId::PRAGUE,
+            spec: SpecId::OSAKA,
             precompiles: None,
             state: BuilderNeedsDb { _private: () },
         }
@@ -115,6 +115,29 @@ impl<Insp, Db> TrevmBuilder<Insp, BuilderReady<Db>> {
         }
 
         Trevm::from(evm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use revm::database::{CacheDB, EmptyDB};
+
+    #[test]
+    fn builder_defaults_to_osaka() {
+        let trevm = TrevmBuilder::new().with_db(CacheDB::<EmptyDB>::default()).build_trevm();
+
+        assert_eq!(trevm.spec_id(), SpecId::OSAKA);
+    }
+
+    #[test]
+    fn explicit_spec_overrides_default() {
+        let trevm = TrevmBuilder::new()
+            .with_spec_id(SpecId::PRAGUE)
+            .with_db(CacheDB::<EmptyDB>::default())
+            .build_trevm();
+
+        assert_eq!(trevm.spec_id(), SpecId::PRAGUE);
     }
 }
 

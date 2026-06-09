@@ -22,7 +22,11 @@ pub use with_output::InspectorWithOutput;
 mod test {
     use super::*;
     use crate::{test_utils::TestInspector, NoopBlock, NoopCfg};
-    use revm::{database::InMemoryDB, inspector::InspectorEvmTr, primitives::B256};
+    use revm::{
+        database::InMemoryDB,
+        inspector::InspectorEvmTr,
+        primitives::{hardfork::SpecId, B256},
+    };
     use std::time::Duration;
 
     #[test]
@@ -32,6 +36,7 @@ mod test {
                 .wrap_around(TestInspector::default());
 
         let mut trevm = crate::TrevmBuilder::new()
+            .with_spec_id(SpecId::PRAGUE)
             .with_db(InMemoryDB::default())
             .with_insp(inspector)
             .build_trevm()
