@@ -106,29 +106,6 @@ impl<N: Network, P: Provider<N>> DatabaseAsyncRef for AlloyDb<N, P> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloy::providers::ProviderBuilder;
-    use revm::database_interface::{DatabaseRef, WrapDatabaseAsync};
-
-    #[test]
-    #[ignore = "flaky RPC"]
-    fn can_get_basic() {
-        let client = ProviderBuilder::new().connect_http(
-            "https://mainnet.infura.io/v3/c60b0bb42f8a4c6481ecd229eddaca27".parse().unwrap(),
-        );
-        let alloydb = AlloyDb::new(client, BlockId::from(16148323));
-        let wrapped_alloydb = WrapDatabaseAsync::new(alloydb).unwrap();
-
-        // ETH/USDT pair on Uniswap V2
-        let address: Address = "0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852".parse().unwrap();
-
-        let acc_info = wrapped_alloydb.basic_ref(address).unwrap().unwrap();
-        assert!(acc_info.exists());
-    }
-}
-
 // This code has been reproduced from the original AlloyDB implementation
 // contained in revm.
 // <https://github.com/bluealloy/revm>

@@ -34,8 +34,9 @@ const POOL_ADDRESS: Address = address!("0d4a11d5EEaaC28EC3F61d100daF4d40471f1852
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    // create ethers client and wrap it in Arc<M>
-    let rpc_url = "https://mainnet.infura.io/v3/c60b0bb42f8a4c6481ecd229eddaca27";
+    // The mainnet RPC endpoint is supplied by the caller; none is embedded here.
+    let rpc_url = std::env::var("ETH_RPC_URL")
+        .map_err(|_| eyre::eyre!("set ETH_RPC_URL to a mainnet JSON-RPC endpoint"))?;
 
     let client = ProviderBuilder::new().connect_http(rpc_url.parse()?);
 
