@@ -6,10 +6,11 @@ use revm::{
         states::{bundle_state::BundleRetention, plain_account::PlainStorage, CacheAccount},
         BundleState, State, TransitionAccount, TransitionState,
     },
-    state::{AccountInfo, Bytecode, EvmState},
+    state::{AccountInfo, Bytecode, EvmState, EvmStorage},
     Database, DatabaseCommit, DatabaseRef,
 };
 use std::{
+    borrow::Cow,
     collections::{hash_map, BTreeMap},
     sync::{Arc, RwLock},
 };
@@ -85,7 +86,10 @@ impl<Db> ConcurrentState<Db> {
     }
 
     /// Apply evm transitions to transition state.
-    pub fn apply_transition(&mut self, transitions: Vec<(Address, TransitionAccount)>) {
+    pub fn apply_transition<'a>(
+        &mut self,
+        transitions: impl IntoIterator<Item = (Address, TransitionAccount<Option<Cow<'a, EvmStorage>>>)>,
+    ) {
         // add transition to transition state.
         if let Some(s) = self.info.transition_state.as_mut() {
             s.add_transitions(transitions)
@@ -148,7 +152,9 @@ impl<Db: DatabaseRef + Sync> ConcurrentState<Db> {
             let mut original_account = self.load_cache_account_mut(address)?;
             transitions.push((
                 address,
-                original_account.increment_balance(balance).expect("Balance is not zero"),
+                balance_transition(
+                    original_account.increment_balance(balance).expect("Balance is not zero"),
+                ),
             ))
         }
         // append transition
@@ -172,7 +178,7 @@ impl<Db: DatabaseRef + Sync> ConcurrentState<Db> {
             let mut original_account = self.load_cache_account_mut(address)?;
             let (balance, transition) = original_account.drain_balance();
             balances.push(balance);
-            transitions.push((address, transition))
+            transitions.push((address, balance_transition(transition)))
         }
         // append transition
         if let Some(s) = self.info.transition_state.as_mut() {
@@ -392,6 +398,17 @@ impl<Db: DatabaseRef + Sync> Database for ConcurrentState<Db> {
     }
 }
 
+/// Convert a balance-only transition from [`CacheAccount::increment_balance`]
+/// or [`CacheAccount::drain_balance`] into the form that
+/// [`TransitionState::add_transitions`] accepts. Those transitions never
+/// carry storage, so `None` is equivalent to their empty storage map.
+fn balance_transition(
+    transition: TransitionAccount,
+) -> TransitionAccount<Option<Cow<'static, EvmStorage>>> {
+    debug_assert!(transition.storage.is_empty(), "balance transitions carry no storage");
+    transition.map_storage(|_| None)
+}
+
 /// Non-DB contents of [`ConcurrentState`]
 #[derive(Debug, Default)]
 pub struct ConcurrentStateInfo {
@@ -538,6 +555,23 @@ mod test {
         let mut parent = parent;
         parent.merge_child(child).unwrap();
         assert_eq!(parent.basic_ref(addr).unwrap().unwrap().balance, U256::from(500));
+    }
+
+    #[test]
+    fn created_contract_code_is_available_before_transition_merge() {
+        let bytecode = Bytecode::new_raw(alloy::primitives::Bytes::from_static(&[0x00]));
+        let code_hash = bytecode.hash_slow();
+        let account = revm::state::Account::default()
+            .with_info(AccountInfo::default().with_code(bytecode.clone()))
+            .with_touched_mark()
+            .with_created_mark();
+        let mut state = ConcurrentState::new(EmptyDB::new(), Default::default());
+
+        // The account was never loaded, so this also covers committing an
+        // account that is absent from the cache.
+        state.commit(EvmState::from_iter([(Address::ZERO, account)]));
+
+        assert_eq!(state.code_by_hash(code_hash).unwrap(), bytecode);
     }
 
     #[test]

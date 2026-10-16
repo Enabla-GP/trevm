@@ -6,7 +6,12 @@ use crate::{
 use revm::context::result::EVMError;
 #[cfg(feature = "call")]
 use revm::context::result::ExecutionResult;
-use revm::{interpreter::gas::calculate_initial_tx_gas_for_tx, Database, InspectEvm, Inspector};
+use revm::{
+    context::{Cfg as _, Transaction as _},
+    context_interface::cfg::gas_params::Eip2780TxInfo,
+    interpreter::gas::calculate_initial_tx_gas_for_tx,
+    Database, InspectEvm, Inspector,
+};
 
 impl<Db, Insp> EvmReady<Db, Insp>
 where
@@ -72,11 +77,20 @@ where
     /// - whether the transaction is a contract creation or a call
     /// - the EIP-2930 access list
     /// - the number of [EIP-7702] authorizations
+    /// - when [EIP-2780] is enabled in the cfg, the transferred value and
+    ///   whether the transaction is a self-transfer
     ///
     /// [EIP-2930]: https://eips.ethereum.org/EIPS/eip-2930
     /// [EIP-7702]: https://eips.ethereum.org/EIPS/eip-7702
+    /// [EIP-2780]: https://eips.ethereum.org/EIPS/eip-2780
     pub fn calculate_initial_gas(&self) -> u64 {
-        let gas = calculate_initial_tx_gas_for_tx(self.tx(), self.spec_id());
+        let tx = self.tx();
+        // Mirrors revm's `Handler::validate_initial_tx_gas`.
+        let eip2780 = self.cfg().is_amsterdam_eip2780_enabled().then(|| Eip2780TxInfo {
+            value: tx.value(),
+            is_self_transfer: tx.kind().to() == Some(&tx.caller()),
+        });
+        let gas = calculate_initial_tx_gas_for_tx(tx, self.spec_id(), eip2780);
         gas.initial_regular_gas.saturating_add(gas.initial_state_gas)
     }
 

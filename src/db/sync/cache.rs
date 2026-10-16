@@ -7,8 +7,9 @@ use revm::{
         states::{plain_account::PlainStorage, CacheAccount},
         CacheState, TransitionAccount,
     },
-    state::{Account, AccountInfo, Bytecode, EvmState},
+    state::{Account, AccountInfo, Bytecode, EvmState, EvmStorage},
 };
+use std::borrow::Cow;
 
 /// A concurrent version of [`revm::database::CacheState`].
 ///
@@ -89,10 +90,13 @@ impl ConcurrentCacheState {
     }
 
     /// Apply output of revm execution and create account transitions that are used to build BundleState.
-    pub fn apply_evm_state(&self, evm_state: EvmState) -> Vec<(Address, TransitionAccount)> {
+    pub fn apply_evm_state(
+        &self,
+        evm_state: EvmState,
+    ) -> Vec<(Address, TransitionAccount<Option<Cow<'static, EvmStorage>>>)> {
         let mut transitions = Vec::with_capacity(evm_state.len());
         for (address, account) in evm_state {
-            if let Some(transition) = self.apply_account_state(address, account) {
+            if let Some(transition) = self.apply_account_state(address, Cow::Owned(account)) {
                 transitions.push((address, transition));
             }
         }
@@ -101,14 +105,34 @@ impl ConcurrentCacheState {
 
     /// Apply updated account state to the cached account.
     /// Returns account transition if applicable.
-    fn apply_account_state(&self, address: Address, account: Account) -> Option<TransitionAccount> {
+    fn apply_account_state<'a>(
+        &self,
+        address: Address,
+        account: Cow<'a, Account>,
+    ) -> Option<TransitionAccount<Option<Cow<'a, EvmStorage>>>> {
         // not touched account are never changed.
         if !account.is_touched() {
             return None;
         }
 
-        let mut this_account =
-            self.accounts.get_mut(&address).expect("All accounts should be present inside cache");
+        // The account may not be present in the cache when execution happened on top
+        // of a different database. In that case, we insert account into the cache as if it was just loaded.
+        let mut this_account = match self.accounts.entry(address) {
+            dashmap::Entry::Occupied(entry) => entry.into_ref(),
+            dashmap::Entry::Vacant(entry) => {
+                let cache_account = if account.is_loaded_as_not_existing() {
+                    CacheAccount::new_loaded_not_existing()
+                } else {
+                    let original = account.original_info();
+                    if original.is_empty() {
+                        CacheAccount::new_loaded_empty_eip161(PlainStorage::default())
+                    } else {
+                        CacheAccount::new_loaded(original, PlainStorage::default())
+                    }
+                };
+                entry.insert(cache_account)
+            }
+        };
 
         // If it is marked as selfdestructed inside revm
         // we need to changed state to destroyed.
@@ -119,14 +143,6 @@ impl ConcurrentCacheState {
         let is_created = account.is_created();
         let is_empty = account.is_empty();
 
-        // transform evm storage to storage with previous value.
-        let changed_storage = account
-            .storage
-            .into_iter()
-            .filter(|(_, slot)| slot.is_changed())
-            .map(|(key, slot)| (key, slot.into()))
-            .collect();
-
         // Note: it can happen that created contract get selfdestructed in same block
         // that is why is_created is checked after selfdestructed
         //
@@ -136,7 +152,14 @@ impl ConcurrentCacheState {
         // by just setting storage inside CRATE constructor. Overlap of those contracts
         // is not possible because CREATE2 is introduced later.
         if is_created {
-            return Some(this_account.newly_created(account.info, changed_storage));
+            let transition = this_account.newly_created(account);
+            // Cache created code so it is readable before the transitions are merged.
+            if let Some(info) = transition.info.as_ref() {
+                if let Some(code) = info.code.as_ref() {
+                    self.contracts.insert(info.code_hash, code.clone());
+                }
+            }
+            return Some(transition);
         }
 
         // Account is touched, but not selfdestructed or newly created.
@@ -146,7 +169,7 @@ impl ConcurrentCacheState {
         if is_empty {
             this_account.touch_empty_eip161()
         } else {
-            Some(this_account.change(account.info, changed_storage))
+            Some(this_account.change(account))
         }
     }
 }

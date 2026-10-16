@@ -81,6 +81,8 @@ where
             instruction: self.inner.instruction,
             precompiles: self.inner.precompiles,
             frame_stack: self.inner.frame_stack,
+            #[cfg(feature = "asyncdb")]
+            async_stack: self.inner.async_stack,
         });
         Trevm { inner, state: self.state }
     }
@@ -95,6 +97,8 @@ where
             instruction: self.inner.instruction,
             precompiles: self.inner.precompiles,
             frame_stack: self.inner.frame_stack,
+            #[cfg(feature = "asyncdb")]
+            async_stack: self.inner.async_stack,
         });
         (inspector, Trevm { inner, state: self.state })
     }
@@ -110,6 +114,8 @@ where
             instruction: self.inner.instruction,
             precompiles: self.inner.precompiles,
             frame_stack: self.inner.frame_stack,
+            #[cfg(feature = "asyncdb")]
+            async_stack: self.inner.async_stack,
         });
         Trevm { inner, state: self.state }
     }
@@ -802,6 +808,8 @@ where
                     instruction: self.inner.instruction,
                     precompiles: self.inner.precompiles,
                     frame_stack: self.inner.frame_stack,
+                    #[cfg(feature = "asyncdb")]
+                    async_stack: self.inner.async_stack,
                 }),
                 state: self.state,
             },
@@ -828,6 +836,8 @@ where
                     instruction: self.inner.instruction,
                     precompiles: self.inner.precompiles,
                     frame_stack: self.inner.frame_stack,
+                    #[cfg(feature = "asyncdb")]
+                    async_stack: self.inner.async_stack,
                 }),
                 state: self.state,
             },

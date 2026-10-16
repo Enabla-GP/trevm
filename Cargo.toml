@@ -1,7 +1,7 @@
 [package]
 name = "trevm"
-version = "0.34.4"
-rust-version = "1.83.0"
+version = "0.43.0-enabla.1"
+rust-version = "1.94.1"
 edition = "2021"
 authors = ["init4"]
 homepage = "https://github.com/init4tech/trevm"
@@ -34,7 +34,7 @@ name = "fork_ref_transact"
 required-features = ["alloy-db"]
 
 [dependencies]
-alloy = { version = "=2.0.5", default-features = false, features = [
+alloy = { version = "2.5.0", default-features = false, features = [
     "consensus",
     "rpc-types-mev",
     "eips",
@@ -44,8 +44,8 @@ alloy = { version = "=2.0.5", default-features = false, features = [
     "sol-types",
 ] }
 
-revm = { version = "=40.0.3", default-features = false }
-revm-inspectors = { version = "=0.40.0", optional = true }
+revm = { version = "43.0.3", default-features = false }
+revm-inspectors = { version = "0.44.2", optional = true }
 
 dashmap = { version = "6.1.0", optional = true }
 tracing = "0.1.41"
@@ -54,10 +54,10 @@ thiserror = "2.0.11"
 tokio = { version = "1.44", optional = true }
 
 [dev-dependencies]
-revm = { version = "=40.0.3", features = ["serde-json", "std", "alloydb"] }
+revm = { version = "43.0.3", features = ["serde-json", "std", "alloydb"] }
 trevm = { path = ".", features = ["test-utils"] }
 
-alloy = { version = "=2.0.5", features = ["providers", "transports"] }
+alloy = { version = "2.5.0", features = ["providers", "transports"] }
 
 # misc
 eyre = "0.6"
