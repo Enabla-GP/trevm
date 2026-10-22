@@ -104,7 +104,7 @@ where
     }
 
     /// Get the gas used by the transaction.
-    pub fn gas_used(&self) -> u64 {
+    pub const fn gas_used(&self) -> u64 {
         self.state.result.result.tx_gas_used()
     }
 

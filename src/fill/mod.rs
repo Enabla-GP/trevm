@@ -1,5 +1,8 @@
 mod alloy;
 
+mod header;
+pub use header::HeaderWithBlobParams;
+
 /// Provided fillers that adjust the [`Cfg`], [`Block`] or [`Tx`] environment.
 pub mod fillers;
 

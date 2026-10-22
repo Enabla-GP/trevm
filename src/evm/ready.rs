@@ -224,8 +224,8 @@ where
             start_max = search_range.max(),
         );
         if enabled!(tracing::Level::TRACE) {
-            span.record("tx", format!("{:?}", &self.tx()));
-            span.record("block", format!("{:?}", &self.block()));
+            span.record("tx", format!("{:?}", self.tx()));
+            span.record("block", format!("{:?}", self.block()));
         } else {
             span.record("tx", "omitted. Use TRACE for details");
         }
