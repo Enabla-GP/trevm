@@ -57,3 +57,27 @@ pin, or live-readiness claim is included in this fork change.
 Primary protocol sources: [EIP-4895](https://eips.ethereum.org/EIPS/eip-4895),
 [EIP-7002](https://eips.ethereum.org/EIPS/eip-7002), and
 [EIP-7251](https://eips.ethereum.org/EIPS/eip-7251).
+
+
+## System beneficiary effects (0.43.3-enabla.1)
+
+The shared EIP-4788/7002/7251 execution helper uses revm's native inspected
+system-call path and its protocol-aware gas budget, including the pinned
+implementation's reservoir allowance. System calls have no ordinary transaction
+validation, intrinsic gas, caller gas deduction or beneficiary gas reward.
+Inspector callbacks remain enabled.
+
+Cleanup must preserve legitimate contract storage and account effects even when
+the block beneficiary is a system target or another affected address. It must
+not remove the entire beneficiary account to suppress fees, and it must not
+synthesize a zero-value fee touch at an otherwise untouched empty beneficiary.
+Actual deployed-code regressions cover beacon timestamp/root storage and both
+request queue resets with their target as beneficiary; draining cannot repeat
+the same request. Positive controls cover unrelated balance/nonce and absence
+of artificial empty-account touches.
+
+The existing successful temporary-environment restoration and system-caller
+cleanup remain. Backend/interpreter errors still leave before successful
+cleanup; generic error restoration is separately tracked by ENA-2858 and is not
+included in this correction. The canonical caller drops the entire EVM/overlay
+on such errors. EIP-7002/7251 strict Success output handling remains unchanged.

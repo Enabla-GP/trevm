@@ -71,10 +71,10 @@ use revm::{
     bytecode::Bytecode,
     context::{
         result::{EVMError, ExecutionResult, ResultAndState},
-        Block, ContextTr, Transaction,
+        ContextTr, Transaction,
     },
     primitives::KECCAK_EMPTY,
-    Database, DatabaseCommit, InspectEvm, Inspector,
+    Database, DatabaseCommit, InspectSystemCallEvm, Inspector,
 };
 
 fn checked_insert_code<Db, Insp>(
@@ -102,8 +102,6 @@ fn cleanup_syscall<Db, Insp>(
 ) where
     Db: Database + DatabaseCommit,
 {
-    let coinbase = evm.block().beneficiary();
-
     // Restore the block environment
     evm.modify_block(|block| {
         block.gas_limit = old_gas_limit;
@@ -113,10 +111,9 @@ fn cleanup_syscall<Db, Insp>(
     // Restore the nonce check
     evm.ctx.modify_cfg(|cfg| cfg.disable_nonce_check = previous_nonce_check);
 
-    // Remove the system caller and fees from the state
-    let state = &mut result.state;
-    state.remove(&syscall.caller);
-    state.remove(&coinbase);
+    // Native system calls do not charge gas or reward the beneficiary. Retain
+    // every legitimate contract effect, including effects at the beneficiary.
+    result.state.remove(&syscall.caller);
 }
 
 /// Extract successful protocol request bytes; failed post-ops invalidate the block.
@@ -161,7 +158,8 @@ where
     let old_base_fee = core::mem::take(&mut block.basefee);
     let previous_nonce_check = std::mem::replace(&mut evm.ctx.cfg.disable_nonce_check, true);
 
-    let mut result = evm.inspect_tx(evm.tx().clone())?;
+    let mut result =
+        evm.inspect_system_call_with_caller(syscall.caller, syscall.target, syscall.input.clone())?;
 
     // Cleanup the syscall.
     cleanup_syscall(evm, &mut result, syscall, old_gas_limit, old_base_fee, previous_nonce_check);
@@ -174,11 +172,27 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::request_output;
-    use alloy::primitives::bytes;
+    use super::{
+        eip4788::{
+            eip4788_root_slot, eip4788_timestamp_slot, BEACON_ROOTS_ADDRESS, BEACON_ROOTS_CODE,
+        },
+        eip7002::WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS,
+        eip7251::CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS,
+        request_output,
+    };
+    use crate::{NoopBlock, NoopCfg, TrevmBuilder};
+    use alloy::primitives::{bytes, Address, Bytes, TxKind, B256, U256};
     use core::convert::Infallible;
-    use revm::context::result::{
-        EVMError, ExecutionResult, HaltReason, Output, ResultGas, SuccessReason,
+    use revm::{
+        bytecode::Bytecode,
+        context::{
+            result::{EVMError, ExecutionResult, HaltReason, Output, ResultGas, SuccessReason},
+            BlockEnv, ContextTr, TxEnv,
+        },
+        database::InMemoryDB,
+        primitives::hardfork::SpecId,
+        state::{AccountInfo, EvmState},
+        Database, DatabaseCommit,
     };
 
     #[test]
@@ -217,5 +231,210 @@ mod tests {
         let error = request_output::<Infallible>(result, "EIP-7251").unwrap_err();
         assert!(matches!(error, EVMError::Custom(message)
             if message.contains("EIP-7251") && message.contains("halted")));
+    }
+
+    #[test]
+    fn system_beneficiary_eip4788_preserves_beacon_root_storage() {
+        let timestamp = 8_u64;
+        let root = B256::repeat_byte(0xaa);
+        let mut trevm = crate::test_utils::test_trevm().fill_cfg(&NoopCfg).fill_block(
+            &|block: &mut BlockEnv| {
+                block.beneficiary = BEACON_ROOTS_ADDRESS;
+                block.timestamp = U256::from(timestamp);
+                block.gas_limit = 9_876_543;
+                block.basefee = 17;
+            },
+        );
+        trevm.test_set_bytecode(BEACON_ROOTS_ADDRESS, Bytecode::new_raw(BEACON_ROOTS_CODE.clone()));
+        trevm.test_set_nonce(BEACON_ROOTS_ADDRESS, 7);
+        trevm.test_set_balance(BEACON_ROOTS_ADDRESS, U256::from(19));
+
+        trevm.apply_eip4788(root).unwrap();
+
+        assert_eq!(
+            trevm
+                .try_read_storage(BEACON_ROOTS_ADDRESS, eip4788_timestamp_slot(timestamp))
+                .unwrap(),
+            U256::from(timestamp),
+        );
+        assert_eq!(
+            trevm.try_read_storage(BEACON_ROOTS_ADDRESS, eip4788_root_slot(timestamp)).unwrap(),
+            U256::from_be_bytes(root.0),
+        );
+        assert_eq!(trevm.try_read_balance(BEACON_ROOTS_ADDRESS).unwrap(), U256::from(19));
+        assert_eq!(trevm.try_read_nonce(BEACON_ROOTS_ADDRESS).unwrap(), 7);
+        assert_eq!(trevm.block().gas_limit, 9_876_543);
+        assert_eq!(trevm.block().basefee, 17);
+    }
+
+    #[test]
+    fn system_beneficiary_eip7002_preserves_real_queue_reset() {
+        let user = Address::with_last_byte(0x42);
+        let pubkey = [0x11_u8; 48];
+        let amount = [0x22_u8; 8];
+        let input = Bytes::from([pubkey.as_slice(), amount.as_slice()].concat());
+        let mut trevm = crate::test_utils::test_trevm().fill_cfg(&NoopCfg).fill_block(&NoopBlock);
+        trevm.apply_eip7002().unwrap();
+        trevm.test_set_balance(user, U256::from(1_000));
+        let transaction = |env: &mut TxEnv| {
+            *env = TxEnv {
+                caller: user,
+                kind: TxKind::Call(WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS),
+                value: U256::ONE,
+                gas_limit: 1_000_000,
+                data: input.clone(),
+                ..TxEnv::default()
+            };
+        };
+        let transacted = trevm.run_tx(&transaction).unwrap();
+        assert!(matches!(transacted.result(), ExecutionResult::Success { .. }));
+        let mut trevm = transacted.accept_state();
+        // EIP-7002 COUNT_STORAGE_SLOT is 1, in the actual deployed contract.
+        assert_eq!(
+            trevm.try_read_storage(WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS, U256::ONE).unwrap(),
+            U256::ONE
+        );
+        trevm.inner_mut_unchecked().ctx.block.beneficiary = WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS;
+
+        let requests = trevm.apply_eip7002().unwrap();
+
+        assert_eq!(
+            requests.as_ref(),
+            [user.as_slice(), pubkey.as_slice(), amount.as_slice()].concat()
+        );
+        assert_eq!(
+            trevm.try_read_storage(WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS, U256::ONE).unwrap(),
+            U256::ZERO
+        );
+        assert!(
+            trevm.apply_eip7002().unwrap().is_empty(),
+            "the drained request cannot be emitted twice"
+        );
+    }
+
+    #[test]
+    fn system_beneficiary_eip7251_preserves_real_queue_reset() {
+        let user = Address::with_last_byte(0x42);
+        let source = [0x11_u8; 48];
+        let target = [0x33_u8; 48];
+        let input = Bytes::from([source.as_slice(), target.as_slice()].concat());
+        let mut trevm = crate::test_utils::test_trevm().fill_cfg(&NoopCfg).fill_block(&NoopBlock);
+        trevm.apply_eip7251().unwrap();
+        trevm.test_set_balance(user, U256::from(1_000));
+        let transaction = |env: &mut TxEnv| {
+            *env = TxEnv {
+                caller: user,
+                kind: TxKind::Call(CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS),
+                value: U256::ONE,
+                gas_limit: 1_000_000,
+                data: input.clone(),
+                ..TxEnv::default()
+            };
+        };
+        let transacted = trevm.run_tx(&transaction).unwrap();
+        assert!(matches!(transacted.result(), ExecutionResult::Success { .. }));
+        let mut trevm = transacted.accept_state();
+        // EIP-7251 COUNT_STORAGE_SLOT is 1, in the actual deployed contract.
+        assert_eq!(
+            trevm.try_read_storage(CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS, U256::ONE).unwrap(),
+            U256::ONE
+        );
+        trevm.inner_mut_unchecked().ctx.block.beneficiary = CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS;
+
+        let requests = trevm.apply_eip7251().unwrap();
+
+        assert_eq!(
+            requests.as_ref(),
+            [user.as_slice(), source.as_slice(), target.as_slice()].concat()
+        );
+        assert_eq!(
+            trevm.try_read_storage(CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS, U256::ONE).unwrap(),
+            U256::ZERO
+        );
+        assert!(
+            trevm.apply_eip7251().unwrap().is_empty(),
+            "the drained request cannot be emitted twice"
+        );
+    }
+
+    #[test]
+    fn system_beneficiary_zero_fee_suppression_preserves_unrelated_account() {
+        let beneficiary = Address::with_last_byte(0x77);
+        let mut trevm = crate::test_utils::test_trevm().fill_cfg(&NoopCfg).fill_block(
+            &|block: &mut BlockEnv| {
+                block.beneficiary = beneficiary;
+                block.timestamp = U256::from(8);
+                block.gas_limit = 9_876_543;
+                block.basefee = 17;
+            },
+        );
+        trevm.test_set_balance(beneficiary, U256::from(19));
+        trevm.test_set_nonce(beneficiary, 7);
+
+        trevm.apply_eip4788(B256::repeat_byte(0xaa)).unwrap();
+
+        assert_eq!(trevm.try_read_balance(beneficiary).unwrap(), U256::from(19));
+        assert_eq!(trevm.try_read_nonce(beneficiary).unwrap(), 7);
+        assert_eq!(trevm.block().gas_limit, 9_876_543);
+        assert_eq!(trevm.block().basefee, 17);
+    }
+
+    #[derive(Debug, Default)]
+    struct BeneficiaryDb {
+        inner: InMemoryDB,
+        beneficiary: Address,
+        touched: bool,
+    }
+
+    impl Database for BeneficiaryDb {
+        type Error = Infallible;
+
+        fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+            self.inner.basic(address)
+        }
+
+        fn code_by_hash(&mut self, hash: B256) -> Result<Bytecode, Self::Error> {
+            self.inner.code_by_hash(hash)
+        }
+
+        fn storage(&mut self, address: Address, slot: U256) -> Result<U256, Self::Error> {
+            self.inner.storage(address, slot)
+        }
+
+        fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
+            self.inner.block_hash(number)
+        }
+    }
+
+    impl DatabaseCommit for BeneficiaryDb {
+        fn commit(&mut self, changes: EvmState) {
+            self.touched |=
+                changes.get(&self.beneficiary).is_some_and(|account| account.is_touched());
+            self.inner.commit(changes);
+        }
+    }
+
+    #[test]
+    fn system_beneficiary_empty_account_is_not_artificially_touched() {
+        let beneficiary = Address::with_last_byte(0x77);
+        let mut database = BeneficiaryDb { beneficiary, ..BeneficiaryDb::default() };
+        database.inner.insert_account_info(beneficiary, AccountInfo::default());
+        assert!(database.inner.basic(beneficiary).unwrap().is_some());
+        let mut trevm = TrevmBuilder::new()
+            .with_spec_id(SpecId::PRAGUE)
+            .with_db(database)
+            .build_trevm()
+            .fill_cfg(&NoopCfg)
+            .fill_block(&|block: &mut BlockEnv| {
+                block.beneficiary = beneficiary;
+                block.timestamp = U256::from(8);
+            });
+
+        trevm.apply_eip4788(B256::repeat_byte(0xaa)).unwrap();
+
+        assert!(
+            !trevm.inner_mut_unchecked().ctx.db_mut().touched,
+            "a zero-fee reward must not synthesize a touched empty beneficiary"
+        );
     }
 }
