@@ -1,4 +1,4 @@
-use super::{checked_insert_code, execute_system_tx};
+use super::{checked_insert_code, execute_system_tx, request_output};
 use crate::{helpers::Ctx, system::SystemTx, EvmNeedsTx};
 use alloy::{
     eips::eip7251::CONSOLIDATION_REQUEST_PREDEPLOY_CODE,
@@ -52,6 +52,9 @@ where
     /// post-block action calls the consolidation request contract to process
     /// consolidation requests.
     ///
+    /// Reverted or halted system calls return an operation-specific error; only
+    /// successful calls produce request bytes.
+    ///
     /// [EIP-7251]: https://eips.ethereum.org/EIPS/eip-7251
     pub fn apply_eip7251(&mut self) -> Result<Bytes, EVMError<Db::Error>> {
         if self.spec_id() < SpecId::PRAGUE {
@@ -66,30 +69,22 @@ where
 
         let res = execute_system_tx(self.inner_mut_unchecked(), &SystemTx::eip7251())?;
 
-        // We make assumptions here:
-        // - The system transaction never reverts.
-        // - The system transaction always has an output.
-        // - The system contract produces correct output.
-        // - The output is a list of consolidation requests.
-        // - The output does not contain incomplete requests.
-
-        let Some(output) = res.output() else {
-            panic!("execution halted during consolidation request system contract execution")
-        };
-
-        Ok(output.clone())
+        request_output(res, "EIP-7251 consolidation request")
     }
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
+mod tests {
+    use super::CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS;
     use crate::{NoopBlock, NoopCfg, Tx};
     use alloy::{
         consensus::constants::ETH_TO_WEI,
-        primitives::{fixed_bytes, FixedBytes, TxKind, U256},
+        primitives::{bytes, fixed_bytes, Address, Bytes, FixedBytes, TxKind, U256},
     };
-    use revm::context::TxEnv;
+    use revm::{
+        bytecode::Bytecode,
+        context::{result::EVMError, TxEnv},
+    };
 
     const WITHDRAWAL_ADDR: Address = Address::with_last_byte(0x42);
     const VALIDATOR_PUBKEY: FixedBytes<48> = fixed_bytes!("111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111");
@@ -126,5 +121,18 @@ mod test {
         assert_eq!(&requests[..20], WITHDRAWAL_ADDR.as_slice());
         assert_eq!(&requests[20..68], VALIDATOR_PUBKEY.as_slice());
         assert_eq!(&requests[68..], TARGET_VALIDATOR_PUBKEY.as_slice());
+    }
+    #[test]
+    fn canonical_effects_eip7251_rejects_halting_predeploy() {
+        let mut trevm = crate::test_utils::test_trevm().fill_cfg(&NoopCfg).fill_block(&NoopBlock);
+        trevm.test_set_bytecode(
+            CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS,
+            Bytecode::new_raw(bytes!("fe")),
+        );
+
+        let error = trevm.apply_eip7251().unwrap_err();
+
+        assert!(matches!(error, EVMError::Custom(message)
+            if message.contains("EIP-7251") && message.contains("halted")));
     }
 }

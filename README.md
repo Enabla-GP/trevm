@@ -31,6 +31,11 @@ chain specification and supply them explicitly. See the
 [header blob-parameter contract](docs/contracts/header-blob-params.md) for
 migration examples and the ownership boundary.
 
+The `0.43.2-enabla.1` release also corrects body-withdrawal units and repeated
+recipients, and returns errors for failed Prague request post-ops. See the
+[canonical system-effects contract](docs/contracts/canonical-system-effects.md)
+for failure behavior and caller obligations.
+
 ## Why use Trevm?
 
 Trevm is for building complex high-level flows on top of the low-level revm
