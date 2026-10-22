@@ -1,4 +1,4 @@
-use super::{checked_insert_code, execute_system_tx};
+use super::{checked_insert_code, execute_system_tx, request_output};
 use crate::helpers::Ctx;
 use crate::{system::SystemTx, EvmNeedsTx};
 use alloy::eips::eip7002::WITHDRAWAL_REQUEST_PREDEPLOY_CODE;
@@ -50,6 +50,9 @@ where
     /// post-block action was introduced in Prague, and calls the withdrawal
     /// request contract to accumulate withdrawal requests.
     ///
+    /// Reverted or halted system calls return an operation-specific error; only
+    /// successful calls produce request bytes.
+    ///
     /// [EIP-7002]: https://eips.ethereum.org/EIPS/eip-7002
     pub fn apply_eip7002(&mut self) -> Result<Bytes, EVMError<Db::Error>> {
         if self.spec_id() < SpecId::PRAGUE {
@@ -64,31 +67,22 @@ where
 
         let res = execute_system_tx(self.inner_mut_unchecked(), &SystemTx::eip7002())?;
 
-        // We make assumptions here:
-        // - The system transaction never reverts.
-        // - The system transaction always has an output.
-        // - The system contract produces correct output.
-        // - The output is a list of withdrawal requests.
-        // - The output does not contain incomplete requests.
-
-        let Some(output) = res.output() else {
-            panic!("execution halted during withdrawal request system contract execution")
-        };
-
-        Ok(output.clone())
+        request_output(res, "EIP-7002 withdrawal request")
     }
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
+mod tests {
+    use super::{WITHDRAWAL_REQUEST_BYTES, WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS};
+    use crate::{NoopBlock, NoopCfg, Tx};
     use alloy::{
         consensus::constants::ETH_TO_WEI,
-        primitives::{fixed_bytes, FixedBytes, TxKind, U256},
+        primitives::{bytes, fixed_bytes, Address, Bytes, FixedBytes, TxKind, U256},
     };
-    use revm::context::TxEnv;
-
-    use crate::{NoopBlock, NoopCfg, Tx};
+    use revm::{
+        bytecode::Bytecode,
+        context::{result::EVMError, TxEnv},
+    };
 
     const WITHDRAWAL_ADDR: Address = Address::with_last_byte(0x42);
     const WITHDRAWAL_AMOUNT: FixedBytes<8> = fixed_bytes!("2222222222222222");
@@ -127,5 +121,18 @@ mod test {
         assert_eq!(&requests[0..20], WITHDRAWAL_ADDR.as_slice());
         assert_eq!(&requests[20..68], VALIDATOR_PUBKEY.as_slice());
         assert_eq!(&requests[68..], WITHDRAWAL_AMOUNT.as_slice());
+    }
+    #[test]
+    fn canonical_effects_eip7002_rejects_reverting_predeploy() {
+        let mut trevm = crate::test_utils::test_trevm().fill_cfg(&NoopCfg).fill_block(&NoopBlock);
+        trevm.test_set_bytecode(
+            WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS,
+            Bytecode::new_raw(bytes!("602a60005360016000fd")),
+        );
+
+        let error = trevm.apply_eip7002().unwrap_err();
+
+        assert!(matches!(error, EVMError::Custom(message)
+            if message.contains("EIP-7002") && message.contains("reverted")));
     }
 }

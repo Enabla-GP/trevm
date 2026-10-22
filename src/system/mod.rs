@@ -119,6 +119,22 @@ fn cleanup_syscall<Db, Insp>(
     state.remove(&coinbase);
 }
 
+/// Extract successful protocol request bytes; failed post-ops invalidate the block.
+fn request_output<DbError>(
+    result: ExecutionResult,
+    operation: &str,
+) -> Result<Bytes, EVMError<DbError>> {
+    match result {
+        ExecutionResult::Success { output, .. } => Ok(output.into_data()),
+        ExecutionResult::Revert { .. } => {
+            Err(EVMError::Custom(format!("{operation} system call reverted")))
+        }
+        ExecutionResult::Halt { .. } => {
+            Err(EVMError::Custom(format!("{operation} system call halted")))
+        }
+    }
+}
+
 /// Apply a system transaction as specified in [EIP-4788], [EIP-7002], or
 /// [EIP-7251]. This function will execute the system transaction and apply
 /// the result if non-error, cleaning up any extraneous state changes, and
@@ -154,4 +170,52 @@ where
 
     // apply result, remove receipt from block outputs.
     Ok(result.result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::request_output;
+    use alloy::primitives::bytes;
+    use core::convert::Infallible;
+    use revm::context::result::{
+        EVMError, ExecutionResult, HaltReason, Output, ResultGas, SuccessReason,
+    };
+
+    #[test]
+    fn canonical_effects_request_output_preserves_success_bytes() {
+        let result = ExecutionResult::Success {
+            reason: SuccessReason::Return,
+            gas: ResultGas::default(),
+            logs: Vec::new(),
+            output: Output::Call(bytes!("010203")),
+        };
+
+        assert_eq!(request_output::<Infallible>(result, "EIP-7002").unwrap(), bytes!("010203"));
+    }
+
+    #[test]
+    fn canonical_effects_request_output_rejects_revert_bytes() {
+        let result = ExecutionResult::Revert {
+            gas: ResultGas::default(),
+            logs: Vec::new(),
+            output: bytes!("010203"),
+        };
+
+        let error = request_output::<Infallible>(result, "EIP-7002").unwrap_err();
+        assert!(matches!(error, EVMError::Custom(message)
+            if message.contains("EIP-7002") && message.contains("reverted")));
+    }
+
+    #[test]
+    fn canonical_effects_request_output_rejects_halt_without_panic() {
+        let result = ExecutionResult::Halt {
+            reason: HaltReason::InvalidFEOpcode,
+            gas: ResultGas::default(),
+            logs: Vec::new(),
+        };
+
+        let error = request_output::<Infallible>(result, "EIP-7251").unwrap_err();
+        assert!(matches!(error, EVMError::Custom(message)
+            if message.contains("EIP-7251") && message.contains("halted")));
+    }
 }
