@@ -372,60 +372,6 @@ impl_tx_eip4744_envelope_with_sidecar!(BlobTransactionSidecar);
 impl_tx_eip4744_envelope_with_sidecar!(BlobTransactionSidecarEip7594);
 impl_tx_eip4744_envelope_with_sidecar!(BlobTransactionSidecarVariant);
 
-impl Block for alloy::consensus::Header {
-    fn fill_block_env(&self, block_env: &mut BlockEnv) {
-        let BlockEnv {
-            number,
-            beneficiary,
-            timestamp,
-            gas_limit,
-            basefee,
-            difficulty,
-            prevrandao,
-            blob_excess_gas_and_price: _,
-            slot_num: _,
-        } = block_env;
-        *number = U256::from(self.number);
-        *beneficiary = self.beneficiary;
-        *timestamp = U256::from(self.timestamp);
-        *gas_limit = self.gas_limit;
-        *basefee = self.base_fee_per_gas.unwrap_or_default();
-
-        *difficulty = self.difficulty;
-        *prevrandao = Some(self.mix_hash);
-
-        let update_fraction = if self.prague_active() {
-            revm::primitives::eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE
-        } else {
-            revm::primitives::eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_CANCUN
-        };
-
-        if let Some(excess_blob_gas) = self.excess_blob_gas {
-            block_env.set_blob_excess_gas_and_price(excess_blob_gas, update_fraction);
-        }
-    }
-
-    fn tx_count_hint(&self) -> Option<usize> {
-        None
-    }
-}
-
-impl Block for alloy::rpc::types::eth::Header {
-    fn fill_block_env(&self, block_env: &mut BlockEnv) {
-        self.inner.fill_block_env(block_env);
-    }
-}
-
-impl<T: Send + Sync> Block for alloy::rpc::types::eth::Block<T> {
-    fn fill_block_env(&self, block_env: &mut BlockEnv) {
-        self.header.fill_block_env(block_env);
-    }
-
-    fn tx_count_hint(&self) -> Option<usize> {
-        Some(self.transactions.len())
-    }
-}
-
 impl Tx for alloy::rpc::types::TransactionRequest {
     fn fill_tx_env(&self, tx_env: &mut TxEnv) {
         let TxEnv {
@@ -575,6 +521,8 @@ mod tests {
         assert_eq!(json, raw);
 
         // Fill using the constructed header
-        let _ = test_trevm().fill_cfg(&NoopCfg).fill_block(&header);
+        let filler =
+            crate::HeaderWithBlobParams::new(&header, alloy::eips::eip7840::BlobParams::cancun());
+        let _ = test_trevm().fill_cfg(&NoopCfg).fill_block(&filler);
     }
 }

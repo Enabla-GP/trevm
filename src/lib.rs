@@ -389,7 +389,7 @@ mod ext;
 pub use ext::EvmExtUnchecked;
 
 mod fill;
-pub use fill::{fillers, Block, Cfg, NoopBlock, NoopCfg, Tx};
+pub use fill::{fillers, Block, Cfg, HeaderWithBlobParams, NoopBlock, NoopCfg, Tx};
 
 /// Type aliases for constraining revm context.
 pub mod helpers;

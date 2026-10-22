@@ -25,6 +25,12 @@ to your code.
 
 See the [documentation on docs.rs] for information on usage.
 
+The Enabla fork's `0.43.1-enabla.1` release replaces bare Alloy header/block
+fillers with `HeaderWithBlobParams`. Callers resolve `BlobParams` from the
+chain specification and supply them explicitly. See the
+[header blob-parameter contract](docs/contracts/header-blob-params.md) for
+migration examples and the ownership boundary.
+
 ## Why use Trevm?
 
 Trevm is for building complex high-level flows on top of the low-level revm
