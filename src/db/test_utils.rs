@@ -63,6 +63,10 @@ pub trait DbTestExt: Database + DatabaseCommit {
     }
 
     /// Set a storage slot.
+    ///
+    /// On a database that applies EIP-161 on commit, such as
+    /// [`CacheOnWrite`](crate::db::cow::CacheOnWrite), storage set on an empty
+    /// account (no code, zero nonce, zero balance) does not survive the commit.
     fn test_set_storage(&mut self, address: Address, slot: U256, value: U256) {
         let info = self.basic(address).ok().flatten().unwrap_or_default();
         let storage = [(slot, EvmStorageSlot::new_changed(U256::ZERO, value, transaction_id()))]
