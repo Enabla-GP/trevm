@@ -17,6 +17,11 @@ use super::TryCachingDb;
 /// This saves memory when wrapping some other caching database, like [`State`]
 /// or [`ConcurrentState`].
 ///
+/// Commits apply EIP-161 state clearing: an account that a transaction touched
+/// and left empty, and did not create, is recorded as not existing, as is a
+/// self-destructed account. This matches every hardfork from Spurious Dragon on;
+/// do not use this type to execute earlier blocks.
+///
 /// [`CacheDB`]: revm::database::in_memory_db::CacheDB
 /// [`State`]: revm::database::State
 /// [`ConcurrentState`]: crate::db::sync::ConcurrentState
@@ -217,7 +222,7 @@ impl<Db: DatabaseRef> DatabaseRef for CacheOnWrite<Db> {
 impl<Db> DatabaseCommit for CacheOnWrite<Db> {
     fn commit(&mut self, changes: EvmState) {
         // Reproduced from
-        // revm/crates/database/src/in_memory_db.rs
+        // revm/crates/database/src/in_memory_db.rs, plus EIP-161 state clearing.
         for (address, mut account) in changes {
             if !account.is_touched() {
                 continue;
@@ -232,6 +237,19 @@ impl<Db> DatabaseCommit for CacheOnWrite<Db> {
             }
 
             let is_newly_created = account.is_created();
+
+            // EIP-161 state clear, in the same order as revm's own state cache: a touched
+            // account that was not newly created and ends the transaction empty is removed.
+            // Record it as not existing, so later account lookups do not fall through to the
+            // inner database.
+            if !is_newly_created && account.is_empty() {
+                let db_account = self.cache.accounts.entry(address).or_default();
+                db_account.storage.clear();
+                db_account.account_state = AccountState::NotExisting;
+                db_account.info = AccountInfo::default();
+                continue;
+            }
+
             self.insert_contract(&mut account.info);
 
             let db_account = self.cache.accounts.entry(address).or_default();
@@ -332,6 +350,79 @@ mod tests {
     }
 
     #[test]
+    fn touched_empty_account_does_not_exist_after_commit() {
+        let address = Address::repeat_byte(0x61);
+        let mut cow = CacheOnWrite::new(InMemoryDB::default());
+
+        let mut changes = EvmState::default();
+        changes.insert(address, touched_account(AccountInfo::default(), Default::default()));
+        cow.commit(changes);
+
+        assert_eq!(cow.basic(address).unwrap(), None);
+        assert_eq!(cow.basic_ref(address).unwrap(), None);
+        assert_eq!(
+            cow.cache().accounts.get(&address).map(|account| account.account_state.clone()),
+            Some(AccountState::NotExisting)
+        );
+    }
+
+    #[test]
+    fn touched_empty_account_masks_the_inner_account() {
+        let address = Address::repeat_byte(0x62);
+        let mut inner = InMemoryDB::default();
+        inner.insert_account_info(
+            address,
+            AccountInfo { balance: U256::from(5000), ..Default::default() },
+        );
+        let mut cow = CacheOnWrite::new(inner);
+
+        // The transaction moves the whole balance away and leaves the account empty.
+        let mut changes = EvmState::default();
+        changes.insert(address, touched_account(AccountInfo::default(), Default::default()));
+        cow.commit(changes);
+
+        assert_eq!(cow.basic(address).unwrap(), None);
+    }
+
+    #[test]
+    fn newly_created_empty_account_is_kept() {
+        // As in revm's own state cache, a newly created account is not cleared even if it
+        // ends the transaction empty, so constructor storage survives.
+        let address = Address::repeat_byte(0x64);
+        let mut cow = CacheOnWrite::new(InMemoryDB::default());
+        let mut account = touched_account(
+            AccountInfo::default(),
+            [(
+                U256::from(7),
+                EvmStorageSlot::new_changed(U256::ZERO, U256::from(77), transaction_id()),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        account.status = AccountStatus::Created | AccountStatus::Touched;
+
+        let mut changes = EvmState::default();
+        changes.insert(address, account);
+        cow.commit(changes);
+
+        assert_eq!(cow.basic(address).unwrap(), Some(AccountInfo::default()));
+        assert_eq!(cow.storage(address, U256::from(7)).unwrap(), U256::from(77));
+    }
+
+    #[test]
+    fn touched_non_empty_account_is_kept() {
+        let address = Address::repeat_byte(0x63);
+        let mut cow = CacheOnWrite::new(InMemoryDB::default());
+        let info = AccountInfo { balance: U256::from(1), ..Default::default() };
+
+        let mut changes = EvmState::default();
+        changes.insert(address, touched_account(info.clone(), Default::default()));
+        cow.commit(changes);
+
+        assert_eq!(cow.basic(address).unwrap(), Some(info));
+    }
+
+    #[test]
     fn test_set_balance() {
         let addr = Address::repeat_byte(1);
         let mut cow = CacheOnWrite::new(InMemoryDB::default());
@@ -359,6 +450,8 @@ mod tests {
     fn test_set_storage() {
         let addr = Address::repeat_byte(3);
         let mut cow = CacheOnWrite::new(InMemoryDB::default());
+        // A non-empty account: storage on an empty one would not survive EIP-161.
+        cow.test_set_nonce(addr, 1);
 
         cow.test_set_storage(addr, U256::from(10), U256::from(999));
         assert_eq!(cow.storage(addr, U256::from(10)).unwrap(), U256::from(999));
